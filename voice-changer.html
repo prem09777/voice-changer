@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Live Voice Changer</title>
+<style>
+:root{--bg:#f6f5fb;--card:#fff;--text:#1d1b2e;--mute:#6b6880;--acc:#6c4cf5;--accfg:#fff;--bd:#e3e0f0;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14121f;--card:#1f1c30;--text:#f0eefc;--mute:#9b97b5;--acc:#8b73ff;--accfg:#0f0b24;--bd:#322e4a}}
+:root[data-theme="dark"]{--bg:#14121f;--card:#1f1c30;--text:#f0eefc;--mute:#9b97b5;--acc:#8b73ff;--accfg:#0f0b24;--bd:#322e4a}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
+main{max-width:520px;margin:0 auto;padding:20px 16px 32px}
+h1{font-size:1.5rem;margin:8px 0 4px}
+p.sub{color:var(--mute);margin:0 0 18px;font-size:.95rem}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px}
+.v{background:var(--card);color:var(--text);border:2px solid var(--bd);border-radius:16px;padding:16px 8px;font-size:1rem;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px}
+.v span{font-size:1.9rem}
+.v.on{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 25%,transparent)}
+.go{width:100%;padding:18px;border:0;border-radius:16px;background:var(--acc);color:var(--accfg);font-size:1.15rem;font-weight:600;cursor:pointer}
+.go.live{background:#e5484d;color:#fff}
+.box{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:14px;margin-top:16px}
+.box label{display:flex;justify-content:space-between;font-size:.9rem;color:var(--mute)}
+input[type=range]{width:100%;margin-top:8px;accent-color:var(--acc)}
+.warn{font-size:.85rem;color:var(--mute);margin-top:14px;line-height:1.45}
+#st{text-align:center;margin-top:10px;font-size:.9rem;color:var(--mute);min-height:1.2em}
+</style>
+</head>
+<body>
+<main>
+<h1>🎙️ Live Voice Changer</h1>
+<p class="sub">Pick a voice, tap Start, and talk. Your voice changes in real time.</p>
+<div class="grid" id="grid"></div>
+<button class="go" id="go">Start</button>
+<div id="st"></div>
+<div class="box">
+<label><span>Fine-tune pitch</span><span id="pv">0</span></label>
+<input type="range" id="fine" min="-6" max="6" step="1" value="0">
+</div>
+<div class="box">
+<label><span>Volume</span><span id="vv">100%</span></label>
+<input type="range" id="vol" min="0" max="150" value="100">
+</div>
+<p class="warn">🎧 Use headphones, or you’ll get feedback echo. For a live call, play this app’s sound into your call app (for example by sharing audio, or using a virtual audio cable on a computer).</p>
+</main>
+<script>
+var VOICES=[
+{n:"Man",e:"👨",r:0.78,w:0,ring:0,lp:6000},
+{n:"Woman",e:"👩",r:1.28,w:0,ring:0,lp:9000},
+{n:"Girl",e:"👧",r:1.55,w:0,ring:0,lp:10000},
+{n:"Robot",e:"🤖",r:0.95,w:0,ring:0.9,lp:5000},
+{n:"Granny",e:"👵",r:1.2,w:0.035,ring:0,lp:4500},
+{n:"Grandpa",e:"👴",r:0.72,w:0.03,ring:0,lp:3800}
+];
+var cur=VOICES[0],fine=0,ctx=null,stream=null,proc=null,gain=null,lpf=null,src=null,live=false;
+var grid=document.getElementById("grid"),go=document.getElementById("go"),st=document.getElementById("st");
+VOICES.forEach(function(v,i){
+var b=document.createElement("button");b.className="v"+(i===0?" on":"");
+b.innerHTML="<span>"+v.e+"</span>"+v.n;
+b.onclick=function(){cur=v;[].forEach.call(grid.children,function(c){c.classList.remove("on")});b.classList.add("on");if(lpf)lpf.frequency.value=v.lp};
+grid.appendChild(b)});
+document.getElementById("fine").oninput=function(e){fine=+e.target.value;document.getElementById("pv").textContent=(fine>0?"+":"")+fine};
+document.getElementById("vol").oninput=function(e){document.getElementById("vv").textContent=e.target.value+"%";if(gain)gain.gain.value=e.target.value/100};
+function start(){
+st.textContent="Asking for microphone…";
+navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:false}}).then(function(s){
+stream=s;ctx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:"interactive"});
+var sr=ctx.sampleRate,N=8192,W=2048,buf=new Float32Array(N),w=0,d1=0,ph=0,rp=0;
+src=ctx.createMediaStreamSource(s);
+proc=ctx.createScriptProcessor(1024,1,1);
+proc.onaudioprocess=function(ev){
+var inp=ev.inputBuffer.getChannelData(0),out=ev.outputBuffer.getChannelData(0),v=cur;
+var base=v.r*Math.pow(2,fine/12);
+for(var i=0;i<inp.length;i++){
+buf[w]=inp[i];w=(w+1)&(N-1);
+var r=base*(1+v.w*Math.sin(ph));ph+=6.2832*5.5/sr;
+d1+=1-r;if(d1<0)d1+=W;else if(d1>=W)d1-=W;
+var d2=d1+W/2;if(d2>=W)d2-=W;
+var o=tap(d1)*sq(Math.sin(3.14159*d1/W))+tap(d2)*sq(Math.sin(3.14159*d2/W));
+if(v.ring>0){rp+=6.2832*55/sr;o*=(1-v.ring)+v.ring*Math.sin(rp)}
+out[i]=o}
+function tap(d){var p=w-1-d,i0=Math.floor(p),f=p-i0;return buf[i0&(N-1)]*(1-f)+buf[(i0+1)&(N-1)]*f}
+function sq(x){return x*x}
+};
+lpf=ctx.createBiquadFilter();lpf.type="lowpass";lpf.frequency.value=cur.lp;
+gain=ctx.createGain();gain.gain.value=document.getElementById("vol").value/100;
+src.connect(proc);proc.connect(lpf);lpf.connect(gain);gain.connect(ctx.destination);
+live=true;go.textContent="Stop";go.classList.add("live");st.textContent="Live: speak now";
+}).catch(function(){st.textContent="Microphone access was blocked. Allow it in your browser settings and try again."})}
+function stop(){
+try{proc.disconnect();src.disconnect()}catch(e){}
+if(stream)stream.getTracks().forEach(function(t){t.stop()});
+if(ctx)ctx.close();ctx=null;live=false;go.textContent="Start";go.classList.remove("live");st.textContent=""}
+go.onclick=function(){live?stop():start()};
+</script>
+</body>
+</html>
